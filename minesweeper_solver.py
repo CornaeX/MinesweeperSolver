@@ -105,7 +105,7 @@ def compute_solver_overlay(matrix, rows, cols):
     for (r, c) in confirmed_mines:
         overlay[r][c] = '#FF4444'  # Red (Mine)
 
-    # 2. Probability Heuristic Pass (Yellow Guess tracking)
+    # 2. Probability Heuristic Pass
     mine_probs = {}
     for r in range(rows):
         for c in range(cols):
@@ -253,36 +253,56 @@ def main():
                 ly = int(j * cell_h_step)
                 canvas.create_line(0, ly, final_w, ly, fill="#2A2A2A", width=1, tags="grid")
 
-            # Runtime memory registers wrapper to bypass deep closure updates safely
-            app_signals = {"visible": True, "recapture": False, "terminate": False}
+            # Thread-safe context signals register
+            app_signals = {
+                "visible": True, 
+                "recapture": False, 
+                "terminate": False,
+                "toggle_visible": False
+            }
             last_board_matrix = [None]
-            last_toggle_time = [0]
+
+            # Callback modifiers to protect Tkinter thread runtime
+            def trigger_recapture(): app_signals["recapture"] = True
+            def trigger_toggle(): app_signals["toggle_visible"] = True
+            def trigger_terminate(): app_signals["terminate"] = True
+
+            # Register hardware background listeners (Locks input instantly)
+            hk_f8 = keyboard.add_hotkey("F8", trigger_recapture)
+            hk_f10 = keyboard.add_hotkey("F10", trigger_toggle)
+            hk_esc = keyboard.add_hotkey("esc", trigger_terminate)
+
+            def clean_hotkeys():
+                keyboard.remove_hotkey(hk_f8)
+                keyboard.remove_hotkey(hk_f10)
+                keyboard.remove_hotkey(hk_esc)
 
             def check_inputs_and_update():
-                cur_time = time.time()
-
-                if keyboard.is_pressed("F8"):
-                    app_signals["recapture"] = True
+                if app_signals["terminate"]:
+                    clean_hotkeys()
                     root.destroy()
                     return
 
-                if keyboard.is_pressed("F10") and cur_time - last_toggle_time[0] > 0.3:
-                    last_toggle_time[0] = cur_time
+                if app_signals["recapture"]:
+                    clean_hotkeys()
+                    root.destroy()
+                    return
+
+                # Handle instantaneous visibility state switch safely 
+                if app_signals["toggle_visible"]:
+                    app_signals["toggle_visible"] = False # Reset flag latch
                     app_signals["visible"] = not app_signals["visible"]
                     action_state = "normal" if app_signals["visible"] else "hidden"
+                    
                     canvas.itemconfigure("grid", state=action_state)
                     canvas.itemconfigure("overlay", state=action_state)
+                    
                     if not app_signals["visible"]:
                         canvas.delete("overlay")
                         last_board_matrix[0] = None
                     print(f"[HUD] Overlay Layer: {'VISIBLE' if app_signals['visible'] else 'HIDDEN'}")
 
-                if keyboard.is_pressed("esc"):
-                    app_signals["terminate"] = True
-                    root.destroy()
-                    return
-
-                # --- REAL-TIME SOLVER CONTEXT PROCESSING ---
+                # --- REAL-TIME GRAPHICS ENGINE PASS ---
                 if app_signals["visible"]:
                     grid_config = {"top": screen_y, "left": screen_x, "width": final_w, "height": final_h}
                     with mss.MSS() as fresh_sct:
@@ -299,7 +319,7 @@ def main():
                             row_states.append(identify_cell_state(fresh_shot[y1:y2, x1:x2]))
                         board_matrix.append(row_states)
 
-                    # Only alter graphics primitives if an underlying state changes
+                    # Dynamic draw sequence fires only when board pixels shift
                     if board_matrix != last_board_matrix[0]:
                         last_board_matrix[0] = board_matrix
                         canvas.delete("overlay")
@@ -319,7 +339,7 @@ def main():
                                         tags="overlay", state="normal"
                                     )
 
-                # Set real-time scan frame polling latency loop back down to ~100ms ticks
+                # Fixed 100ms cycle interval polling frame tick
                 root.after(100, check_inputs_and_update)
 
             root.after(100, check_inputs_and_update)
