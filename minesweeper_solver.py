@@ -453,7 +453,7 @@ def main():
                                 if color_hex:
                                     x1, y1 = int(c * cell_w_step), int(r * cell_h_step)
                                     x2, y2 = int((c + 1) * cell_w_step), int((r + 1) * cell_h_step)
-                                    canvas.create_rectangle(x1 + 3, y1 + 3, x2 - 3, y2 - 3, outline=color_hex, width=2, tags="overlay")
+                                    canvas.create_rectangle(x1 + 3, y1 + 3, x2 - 3, y2 - 3, outline=color_hex, width=1, tags="overlay")
 
                 root.after(40, check_inputs_and_update)
 
