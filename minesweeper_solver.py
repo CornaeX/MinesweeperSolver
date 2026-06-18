@@ -73,15 +73,14 @@ def compute_solver_overlay(matrix, rows, cols):
     confirmed_safe = set()
     confirmed_mines = set()
 
-    # Default mappings: set explicit flags to red, unrevealed tiles to default uncertain green
     for r in range(rows):
         for c in range(cols):
             if matrix[r][c] == 'F':
                 overlay[r][c] = '#FF4444'  # Red
             elif matrix[r][c] == 'H':
-                overlay[r][c] = '#00FF66'  # Green (Uncertain default)
+                overlay[r][c] = '#00FF66'  # Green (Default Uncertain)
 
-    # 1. First-Order Logic Pass (Direct Constraints Match)
+    # 1. First-Order Logic Pass
     for r in range(rows):
         for c in range(cols):
             val = matrix[r][c]
@@ -94,22 +93,19 @@ def compute_solver_overlay(matrix, rows, cols):
                 
                 h_count, f_count = len(h_list), len(f_list)
 
-                # Flag count satisfies number value -> All other hidden neighbors are safe
                 if f_count == num:
                     for h_cell in h_list:
                         confirmed_safe.add(h_cell)
-                # Hidden space + flags match number value exactly -> All hidden targets are mines
                 if f_count + h_count == num:
                     for h_cell in h_list:
                         confirmed_mines.add(h_cell)
 
-    # Lock down deterministic answers
     for (r, c) in confirmed_safe:
         overlay[r][c] = '#00A2FF'  # Blue (Safe)
     for (r, c) in confirmed_mines:
         overlay[r][c] = '#FF4444'  # Red (Mine)
 
-    # 2. Probability Heuristic Pass (Calculate Yellow Best Guess)
+    # 2. Probability Heuristic Pass (Yellow Guess tracking)
     mine_probs = {}
     for r in range(rows):
         for c in range(cols):
@@ -118,7 +114,6 @@ def compute_solver_overlay(matrix, rows, cols):
                 num = int(val)
                 neighbors = get_neighbors(r, c, rows, cols)
                 
-                # Look only at active unknown spots (ignore already cleared/safe/mined results)
                 unresolved_h = [n for n in neighbors if matrix[n[0]][n[1]] == 'H' and n not in confirmed_safe and n not in confirmed_mines]
                 locked_mines = len([n for n in neighbors if matrix[n[0]][n[1]] == 'F' or n in confirmed_mines])
                 
@@ -128,14 +123,12 @@ def compute_solver_overlay(matrix, rows, cols):
                 if rem_h > 0 and rem_mines >= 0:
                     local_p = rem_mines / rem_h
                     for h_cell in unresolved_h:
-                        # Assign the highest local risk constraint found across neighbors
                         mine_probs[h_cell] = max(mine_probs.get(h_cell, 0.0), local_p)
 
-    # Isolate unassigned cells and highlight the absolute lowest risk index
     eligible_yellows = {k: v for k, v in mine_probs.items() if k not in confirmed_safe and k not in confirmed_mines}
     if eligible_yellows:
         min_p = min(eligible_yellows.values())
-        if min_p < 1.0: # Keep yellow strictly for non-exploding tiles
+        if min_p < 1.0:
             for h_cell, p in eligible_yellows.items():
                 if p == min_p:
                     overlay[h_cell[0]][h_cell[1]] = '#FFBB33'  # Yellow (Best Guess)
@@ -143,7 +136,7 @@ def compute_solver_overlay(matrix, rows, cols):
     return overlay
 
 def calculate_matrix_by_projection(edge_map, total_w, total_h):
-    """Fallback: Scans periodic frequency peaks of grid lines to find rows/cols."""
+    """Fallback Line Analyzer scanner mechanism."""
     v_proj = np.sum(edge_map, axis=0)
     h_proj = np.sum(edge_map, axis=1)
     
@@ -166,7 +159,7 @@ def calculate_matrix_by_projection(edge_map, total_w, total_h):
 
 def main():
     while True:
-        print("\n[READY] Press F8 to select/recapture the Minesweeper window area...")
+        print("\n[READY] Press F8 to map/recapture your Minesweeper window area...")
         keyboard.wait("F8")
         time.sleep(0.2)
 
@@ -179,7 +172,7 @@ def main():
 
             x, y, w, h = roi
             if w == 0 or h == 0:
-                print("Selection cancelled. Exiting program loop.")
+                print("Selection cancelled. Terminating program script.")
                 break
 
             rough_crop = screenshot[y:y+h, x:x+w]
@@ -208,7 +201,7 @@ def main():
                 grid_x1, grid_y1 = bx, by
                 grid_x2, grid_y2 = bx + bw, by + bh
             else:
-                print("[ERROR] Could not locate board grid shapes. Try recapturing closer to the frame boundaries.")
+                print("[ERROR] Could not detect grid contours. Try expanding selection wider than the board.")
                 continue
 
             final_w = grid_x2 - grid_x1
@@ -233,14 +226,13 @@ def main():
             cell_w_step = final_w / cols
             cell_h_step = final_h / rows
 
-            print(f"\n--- RADAR AUTO-SYNCHRONIZED ---")
+            print(f"\n--- RADAR AUTO-SYNCHRONIZED (REAL-TIME ACTIVE) ---")
             print(f"Detected Matrix: {rows} rows x {cols} columns")
             print(f"Unit Cell Size: {cell_w_step:.2f}x{cell_h_step:.2f} pixels")
             print("\n[CONTROLS]:")
-            print("  F8  -> Recapture Board Bounds (Reset Current Grid)")
-            print("  F9  -> Execute Logic Solver & Render Color Overlays")
+            print("  F8  -> Recapture Board Bounds & Reset Tracking Alignment")
             print("  F10 -> Toggle Entire HUD Display Layer ON/OFF")
-            print("  ESC -> Exit Application Completely")
+            print("  ESC -> Close Script Completely")
 
             # --- LATTICE HUD DISPLAY (TKINTER) ---
             root = tk.Tk()
@@ -261,25 +253,37 @@ def main():
                 ly = int(j * cell_h_step)
                 canvas.create_line(0, ly, final_w, ly, fill="#2A2A2A", width=1, tags="grid")
 
+            # Runtime memory registers wrapper to bypass deep closure updates safely
             app_signals = {"visible": True, "recapture": False, "terminate": False}
+            last_board_matrix = [None]
+            last_toggle_time = [0]
 
-            def check_inputs():
+            def check_inputs_and_update():
+                cur_time = time.time()
+
                 if keyboard.is_pressed("F8"):
                     app_signals["recapture"] = True
                     root.destroy()
                     return
 
-                if keyboard.is_pressed("F10"):
+                if keyboard.is_pressed("F10") and cur_time - last_toggle_time[0] > 0.3:
+                    last_toggle_time[0] = cur_time
                     app_signals["visible"] = not app_signals["visible"]
                     action_state = "normal" if app_signals["visible"] else "hidden"
                     canvas.itemconfigure("grid", state=action_state)
                     canvas.itemconfigure("overlay", state=action_state)
+                    if not app_signals["visible"]:
+                        canvas.delete("overlay")
+                        last_board_matrix[0] = None
                     print(f"[HUD] Overlay Layer: {'VISIBLE' if app_signals['visible'] else 'HIDDEN'}")
-                    time.sleep(0.3)
 
-                # Live Solver Routine Scan
-                if keyboard.is_pressed("F9"):
-                    canvas.delete("overlay") # Clear last cycle's calculations
+                if keyboard.is_pressed("esc"):
+                    app_signals["terminate"] = True
+                    root.destroy()
+                    return
+
+                # --- REAL-TIME SOLVER CONTEXT PROCESSING ---
+                if app_signals["visible"]:
                     grid_config = {"top": screen_y, "left": screen_x, "width": final_w, "height": final_h}
                     with mss.MSS() as fresh_sct:
                         fresh_shot = cv2.cvtColor(np.array(fresh_sct.grab(grid_config)), cv2.COLOR_BGRA2BGR)
@@ -295,36 +299,30 @@ def main():
                             row_states.append(identify_cell_state(fresh_shot[y1:y2, x1:x2]))
                         board_matrix.append(row_states)
 
-                    # Compute color matrices
-                    solver_map = compute_solver_overlay(board_matrix, rows, cols)
-                    action_state = "normal" if app_signals["visible"] else "hidden"
+                    # Only alter graphics primitives if an underlying state changes
+                    if board_matrix != last_board_matrix[0]:
+                        last_board_matrix[0] = board_matrix
+                        canvas.delete("overlay")
+                        
+                        solver_map = compute_solver_overlay(board_matrix, rows, cols)
+                        for r in range(rows):
+                            for c in range(cols):
+                                color_hex = solver_map[r][c]
+                                if color_hex:
+                                    x1 = int(c * cell_w_step)
+                                    y1 = int(r * cell_h_step)
+                                    x2 = int((c + 1) * cell_w_step)
+                                    y2 = int((r + 1) * cell_h_step)
+                                    canvas.create_rectangle(
+                                        x1 + 3, y1 + 3, x2 - 3, y2 - 3, 
+                                        outline=color_hex, width=3, 
+                                        tags="overlay", state="normal"
+                                    )
 
-                    # Render targeted colorful bounding accents inside the cell frames
-                    for r in range(rows):
-                        for c in range(cols):
-                            color_hex = solver_map[r][c]
-                            if color_hex:
-                                x1 = int(c * cell_w_step)
-                                y1 = int(r * cell_h_step)
-                                x2 = int((c + 1) * cell_w_step)
-                                y2 = int((r + 1) * cell_h_step)
-                                # Clean 4px internal border frame highlight
-                                canvas.create_rectangle(
-                                    x1 + 3, y1 + 3, x2 - 3, y2 - 3, 
-                                    outline=color_hex, width=3, 
-                                    tags="overlay", state=action_state
-                                )
-                    print("[SOLVER] Grid analytics updated and drawn successfully.")
-                    time.sleep(0.4)
+                # Set real-time scan frame polling latency loop back down to ~100ms ticks
+                root.after(100, check_inputs_and_update)
 
-                if keyboard.is_pressed("esc"):
-                    app_signals["terminate"] = True
-                    root.destroy()
-                    return
-
-                root.after(50, check_inputs)
-
-            root.after(50, check_inputs)
+            root.after(100, check_inputs_and_update)
             root.mainloop()
 
             if app_signals["terminate"]:
