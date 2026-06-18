@@ -445,7 +445,7 @@ def main():
                                 canvas.create_line(0, ly, final_w, ly, fill="#FF00FF", width=2, tags="debug_line")
                         
                         solver_map, safe_set, mine_set, yellow_dict = compute_solver_overlay(board_matrix, rows, cols)
-                        # app_signals["latest_moves"] = (safe_set, mine_set, yellow_dict)
+                        app_signals["latest_moves"] = (safe_set, mine_set, yellow_dict)
                         
                         for r in range(rows):
                             for c in range(cols):
