@@ -370,7 +370,7 @@ def main():
             app_signals = {
                 "visible": True, "recapture": False, "terminate": False, "toggle_visible": False,
                 "auto_play": False, "auto_playing_thread": False, "latest_moves": None,
-                "force_refresh": False
+                "force_refresh": False, "debug_grid": False
             }
             last_board_matrix = [None]
 
@@ -384,14 +384,19 @@ def main():
                 if app_signals["auto_play"] and not app_signals["auto_playing_thread"]:
                     app_signals["auto_playing_thread"] = True
                     threading.Thread(target=auto_solver_loop, args=(app_signals, screen_x, screen_y, cell_w_step, cell_h_step), daemon=True).start()
-
+            def trigger_debug_grid():
+                app_signals["debug_grid"] = not app_signals["debug_grid"]
+                app_signals["force_refresh"] = True # Force a redraw frame
+                print(f"[DEBUG] Verification grid overlay: {'[ENABLED]' if app_signals['debug_grid'] else '[DISABLED]'}")
+                
+            hk_f7 = keyboard.add_hotkey("F7", trigger_debug_grid)    
             hk_f8 = keyboard.add_hotkey("F8", trigger_recapture)
             hk_f9 = keyboard.add_hotkey("F9", trigger_toggle_auto)
             hk_f10 = keyboard.add_hotkey("F10", trigger_toggle)
             hk_esc = keyboard.add_hotkey("esc", trigger_terminate)
 
             def clean_hotkeys():
-                keyboard.remove_hotkey(hk_f8); keyboard.remove_hotkey(hk_f9)
+                keyboard.remove_hotkey(hk_f7); keyboard.remove_hotkey(hk_f8); keyboard.remove_hotkey(hk_f9)
                 keyboard.remove_hotkey(hk_f10); keyboard.remove_hotkey(hk_esc)
 
             def check_inputs_and_update():
@@ -427,8 +432,20 @@ def main():
                         app_signals["force_refresh"] = False # Reset the flag immediately
                         last_board_matrix[0] = board_matrix
                         canvas.delete("overlay")
+                        canvas.delete("debug_line")
+                        
+                        if app_signals["debug_grid"]:
+                            # Vertical lines
+                            for i in range(cols + 1):
+                                lx = int(i * cell_w_step)
+                                canvas.create_line(lx, 0, lx, final_h, fill="#FF00FF", width=2, tags="debug_line")
+                            # Horizontal lines
+                            for j in range(rows + 1):
+                                ly = int(j * cell_h_step)
+                                canvas.create_line(0, ly, final_w, ly, fill="#FF00FF", width=2, tags="debug_line")
+                        
                         solver_map, safe_set, mine_set, yellow_dict = compute_solver_overlay(board_matrix, rows, cols)
-                        app_signals["latest_moves"] = (safe_set, mine_set, yellow_dict)
+                        # app_signals["latest_moves"] = (safe_set, mine_set, yellow_dict)
                         
                         for r in range(rows):
                             for c in range(cols):
