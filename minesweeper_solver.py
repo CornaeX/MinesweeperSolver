@@ -245,7 +245,7 @@ def compute_solver_overlay(matrix, rows, cols):
             break
 
     # Commit deductions to screen graphics pipeline
-    for (r, c) in confirmed_safe: overlay[r][c] = '#00A2FF'  # Blue
+    for (r, c) in confirmed_safe: overlay[r][c] = "#00FF22"  # Blue
     for (r, c) in confirmed_mines: overlay[r][c] = '#FF4444' # Red
 
     # --- PASS 3: PROBABILITY HEURISTIC ESTIMATION ---
@@ -389,14 +389,16 @@ def main():
                 app_signals["force_refresh"] = True # Force a redraw frame
                 print(f"[DEBUG] Verification grid overlay: {'[ENABLED]' if app_signals['debug_grid'] else '[DISABLED]'}")
                 
-            hk_f7 = keyboard.add_hotkey("F7", trigger_debug_grid)    
+            keyboard.add_hotkey("w", trigger_debug_grid)    
             hk_f8 = keyboard.add_hotkey("F8", trigger_recapture)
             hk_f9 = keyboard.add_hotkey("F9", trigger_toggle_auto)
             hk_f10 = keyboard.add_hotkey("F10", trigger_toggle)
             hk_esc = keyboard.add_hotkey("esc", trigger_terminate)
 
             def clean_hotkeys():
-                keyboard.remove_hotkey(hk_f7); keyboard.remove_hotkey(hk_f8); keyboard.remove_hotkey(hk_f9)
+                try: keyboard.remove_hotkey("w")
+                except: pass
+                keyboard.remove_hotkey(hk_f8); keyboard.remove_hotkey(hk_f9)
                 keyboard.remove_hotkey(hk_f10); keyboard.remove_hotkey(hk_esc)
 
             def check_inputs_and_update():
@@ -429,31 +431,44 @@ def main():
                         board_matrix.append(row_states)
 
                     if board_matrix != last_board_matrix[0] or app_signals.get("force_refresh"):
-                        app_signals["force_refresh"] = False # Reset the flag immediately
+                        app_signals["force_refresh"] = False 
                         last_board_matrix[0] = board_matrix
                         canvas.delete("overlay")
                         canvas.delete("debug_line")
                         
                         if app_signals["debug_grid"]:
-                            # Vertical lines
                             for i in range(cols + 1):
                                 lx = int(i * cell_w_step)
                                 canvas.create_line(lx, 0, lx, final_h, fill="#FF00FF", width=2, tags="debug_line")
-                            # Horizontal lines
                             for j in range(rows + 1):
                                 ly = int(j * cell_h_step)
                                 canvas.create_line(0, ly, final_w, ly, fill="#FF00FF", width=2, tags="debug_line")
                         
                         solver_map, safe_set, mine_set, yellow_dict = compute_solver_overlay(board_matrix, rows, cols)
-                        # app_signals["latest_moves"] = (safe_set, mine_set, yellow_dict)
+                        app_signals["latest_moves"] = (safe_set, mine_set, yellow_dict)
                         
+                        # Pass 1: Draw status borders
                         for r in range(rows):
                             for c in range(cols):
                                 color_hex = solver_map[r][c]
                                 if color_hex:
                                     x1, y1 = int(c * cell_w_step), int(r * cell_h_step)
                                     x2, y2 = int((c + 1) * cell_w_step), int((r + 1) * cell_h_step)
-                                    canvas.create_rectangle(x1 + 3, y1 + 3, x2 - 3, y2 - 3, outline=color_hex, width=3, tags="overlay")
+                                    canvas.create_rectangle(x1 + 3, y1 + 3, x2 - 3, y2 - 3, outline=color_hex, width=2, tags="overlay")
+
+                        # Pass 2: Render numerical probability details inside unreviewed candidates
+                        for (r, c), prob_val in yellow_dict.items():
+                            x1, y1 = int(c * cell_w_step), int(r * cell_h_step)
+                            x2, y2 = int((c + 1) * cell_w_step), int((r + 1) * cell_h_step)
+                            center_x = (x1 + x2) / 2
+                            center_y = (y1 + y2) / 2
+                            
+                            # Bright yellow for the exact optimal choices; muted gray for suboptimal spots
+                            is_best_guess = (solver_map[r][c] == '#FFBB33')
+                            text_color = "#FFBB33" if is_best_guess else "#A0A0A0"
+                            
+                            text_str = f"{int(prob_val * 100)}%"
+                            canvas.create_text(center_x, center_y, text=text_str, fill=text_color, font=("Arial", 9, "bold"), tags="overlay")
 
                 root.after(40, check_inputs_and_update)
 
