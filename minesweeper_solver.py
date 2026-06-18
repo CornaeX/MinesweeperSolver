@@ -121,6 +121,7 @@ def auto_solver_loop(app_signals, screen_x, screen_y, cell_w_step, cell_h_step):
                 if app_signals["auto_play"]:
                     pyautogui.click(button=click_type)
                     app_signals["latest_moves"] = (set(), set(), {})
+                    app_signals["force_refresh"] = True
                     time.sleep(random.uniform(*DELAY_AFTER_CLICK))
             except pyautogui.FailSafeException:
                 print("[ABORT] Fail-safe triggered via hardware gesture boundary!")
@@ -368,7 +369,8 @@ def main():
 
             app_signals = {
                 "visible": True, "recapture": False, "terminate": False, "toggle_visible": False,
-                "auto_play": False, "auto_playing_thread": False, "latest_moves": None
+                "auto_play": False, "auto_playing_thread": False, "latest_moves": None,
+                "force_refresh": False
             }
             last_board_matrix = [None]
 
@@ -421,7 +423,8 @@ def main():
                             row_states.append(identify_cell_state(fresh_shot[y1:y2, x1:x2]))
                         board_matrix.append(row_states)
 
-                    if board_matrix != last_board_matrix[0]:
+                    if board_matrix != last_board_matrix[0] or app_signals.get("force_refresh"):
+                        app_signals["force_refresh"] = False # Reset the flag immediately
                         last_board_matrix[0] = board_matrix
                         canvas.delete("overlay")
                         solver_map, safe_set, mine_set, yellow_dict = compute_solver_overlay(board_matrix, rows, cols)
