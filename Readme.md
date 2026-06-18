@@ -94,7 +94,3 @@ These are currently tuned for a specific dark theme. If the overlay misreads til
 ## Disclaimer
 
 This project is intended for personal use and experimentation with computer vision and game-solving algorithms on the single-player puzzle game Minesweeper. If you use it against a version of the game with its own terms of service (e.g., an online or app-store release), check that automation is permitted there before enabling autopilot.
-
-## License
-
-Add a license of your choice (e.g. MIT) before publishing.
