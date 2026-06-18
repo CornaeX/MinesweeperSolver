@@ -77,143 +77,164 @@ def calculate_matrix_by_projection(edge_map, total_w, total_h):
         return (16, 16) if total_w > 450 else (9, 9)
     return 16, 30
 
-# --- SETUP & INITIAL DETECTION ---
-print("Press F8 to select the Minesweeper window area...")
-keyboard.wait("F8")
+def main():
+    while True:
+        print("\n[READY] Press F8 to select/recapture the Minesweeper window area...")
+        keyboard.wait("F8")
+        time.sleep(0.2)  # Short debounce
 
-with mss.MSS() as sct:
-    monitor = sct.monitors[1]
-    screenshot = cv2.cvtColor(np.array(sct.grab(monitor)), cv2.COLOR_BGRA2BGR)
+        with mss.MSS() as sct:
+            monitor = sct.monitors[1]
+            screenshot = cv2.cvtColor(np.array(sct.grab(monitor)), cv2.COLOR_BGRA2BGR)
 
-    roi = cv2.selectROI("Select Minesweeper Area", screenshot, fromCenter=False)
-    cv2.destroyAllWindows()
+            roi = cv2.selectROI("Select Minesweeper Area", screenshot, fromCenter=False)
+            cv2.destroyAllWindows()
 
-    x, y, w, h = roi
-    if w == 0 or h == 0:
-        print("Selection cancelled.")
-        exit()
+            x, y, w, h = roi
+            if w == 0 or h == 0:
+                print("Selection cancelled. Exiting program loop.")
+                break
 
-    rough_crop = screenshot[y:y+h, x:x+w]
-    gray = cv2.cvtColor(rough_crop, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(gray, 50, 150)
-    
-    contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-
-    valid_cells = []
-    large_grid_contour = None
-
-    for c in contours:
-        bx, by, bw, bh = cv2.boundingRect(c)
-        aspect_ratio = float(bw) / bh if bh != 0 else 0
-        
-        if 12 <= bw <= 65 and 12 <= bh <= 65 and 0.85 <= aspect_ratio <= 1.15:
-            valid_cells.append((bx, by, bw, bh))
-        elif bw >= 150 and bh >= 150 and 0.95 <= aspect_ratio <= 1.05:
-            large_grid_contour = (bx, by, bw, bh)
-
-    if valid_cells:
-        grid_x1, grid_y1 = min(c[0] for c in valid_cells), min(c[1] for c in valid_cells)
-        grid_x2, grid_y2 = max(c[0] + c[2] for c in valid_cells), max(c[1] + c[3] for c in valid_cells)
-    elif large_grid_contour:
-        bx, by, bw, bh = large_grid_contour
-        grid_x1, grid_y1 = bx, by
-        grid_x2, grid_y2 = bx + bw, by + bh
-    else:
-        print("Could not locate board grid shapes.")
-        exit()
-
-    final_w = grid_x2 - grid_x1
-    final_h = grid_y2 - grid_y1
-    screen_x = monitor["left"] + x + grid_x1
-    screen_y = monitor["top"] + y + grid_y1
-
-    # Dynamic Size Matrix Processing
-    grid_edges = edges[grid_y1:grid_y2, grid_x1:grid_x2]
-    
-    if valid_cells:
-        max_detected_w = max(c[2] for c in valid_cells)
-        max_detected_h = max(c[3] for c in valid_cells)
-        true_tile_contours = [c for c in valid_cells if c[2] >= max_detected_w - 4 and c[3] >= max_detected_h - 4]
-        
-        avg_cell_w = np.median([c[2] for c in true_tile_contours])
-        avg_cell_h = np.median([c[3] for c in true_tile_contours])
-        
-        cols = int(round(final_w / avg_cell_w))
-        rows = int(round(final_h / avg_cell_h))
-    else:
-        rows, cols = calculate_matrix_by_projection(grid_edges, final_w, final_h)
-
-    cell_w_step = final_w / cols
-    cell_h_step = final_h / rows
-
-    print(f"\n--- RADAR AUTO-SYNCHRONIZED ---")
-    print(f"Detected Matrix: {rows} rows x {cols} columns")
-    print(f"Unit Cell Size: {cell_w_step:.2f}x{cell_h_step:.2f} pixels")
-    print("\n[CONTROLS]:")
-    print("  F9  -> Scan & Print Current Progress Matrix")
-    print("  F10 -> Toggle Grid HUD Overlay ON/OFF")
-    print("  ESC -> Exit Tracker Application")
-
-    # --- LATTICE HUD DISPLAY (TKINTER) ---
-    root = tk.Tk()
-    root.overrideredirect(True)
-    root.geometry(f"{final_w}x{final_h}+{screen_x}+{screen_y}")
-    root.lift()
-    root.wm_attributes("-topmost", True)
-    root.wm_attributes("-disabled", True)
-    root.wm_attributes("-transparentcolor", "pink")
-
-    canvas = tk.Canvas(root, bg="pink", highlightthickness=0)
-    canvas.pack(fill="both", expand=True)
-
-    # Drawn lines are assigned to the "grid" tag group for unified toggle commands
-    for i in range(cols + 1):
-        lx = int(i * cell_w_step)
-        canvas.create_line(lx, 0, lx, final_h, fill="green", width=2, tags="grid")
-    for j in range(rows + 1):
-        ly = int(j * cell_h_step)
-        canvas.create_line(0, ly, final_w, ly, fill="green", width=2, tags="grid")
-
-    # Tracking dictionary to maintain inner state variables safely inside loop updates
-    hud_state = {"visible": True}
-
-    def check_inputs():
-        # Toggle Overlay Visibility
-        if keyboard.is_pressed("F10"):
-            hud_state["visible"] = not hud_state["visible"]
-            action_state = "normal" if hud_state["visible"] else "hidden"
-            canvas.itemconfigure("grid", state=action_state)
-            print(f"[HUD] Overlay Layer: {'VISIBLE' if hud_state['visible'] else 'HIDDEN'}")
-            time.sleep(0.3)  # Anti-bounce hardware delay
-
-        # Live Scan Request
-        if keyboard.is_pressed("F9"):
-            print(f"\n--- LIVE MATRIX DATA FRAME ({rows}x{cols}) ---")
-            grid_config = {"top": screen_y, "left": screen_x, "width": final_w, "height": final_h}
-            fresh_shot = cv2.cvtColor(np.array(sct.grab(grid_config)), cv2.COLOR_BGRA2BGR)
+            rough_crop = screenshot[y:y+h, x:x+w]
+            gray = cv2.cvtColor(rough_crop, cv2.COLOR_BGR2GRAY)
+            edges = cv2.Canny(gray, 50, 150)
             
-            board_matrix = []
-            for r in range(rows):
-                row_states = []
-                for c in range(cols):
-                    x1 = int(c * cell_w_step)
-                    y1 = int(r * cell_h_step)
-                    x2 = int((c + 1) * cell_w_step)
-                    y2 = int((r + 1) * cell_h_step)
+            contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+
+            valid_cells = []
+            large_grid_contour = None
+
+            for c in contours:
+                bx, by, bw, bh = cv2.boundingRect(c)
+                aspect_ratio = float(bw) / bh if bh != 0 else 0
+                
+                if 12 <= bw <= 65 and 12 <= bh <= 65 and 0.85 <= aspect_ratio <= 1.15:
+                    valid_cells.append((bx, by, bw, bh))
+                elif bw >= 150 and bh >= 150 and 0.95 <= aspect_ratio <= 1.05:
+                    large_grid_contour = (bx, by, bw, bh)
+
+            if valid_cells:
+                grid_x1, grid_y1 = min(c[0] for c in valid_cells), min(c[1] for c in valid_cells)
+                grid_x2, grid_y2 = max(c[0] + c[2] for c in valid_cells), max(c[1] + c[3] for c in valid_cells)
+            elif large_grid_contour:
+                bx, by, bw, bh = large_grid_contour
+                grid_x1, grid_y1 = bx, by
+                grid_x2, grid_y2 = bx + bw, by + bh
+            else:
+                print("[ERROR] Could not locate board grid shapes. Try recapturing closer to the frame boundaries.")
+                continue
+
+            final_w = grid_x2 - grid_x1
+            final_h = grid_y2 - grid_y1
+            screen_x = monitor["left"] + x + grid_x1
+            screen_y = monitor["top"] + y + grid_y1
+
+            # Dynamic Size Matrix Processing
+            grid_edges = edges[grid_y1:grid_y2, grid_x1:grid_x2]
+            
+            if valid_cells:
+                max_detected_w = max(c[2] for c in valid_cells)
+                max_detected_h = max(c[3] for c in valid_cells)
+                true_tile_contours = [c for c in valid_cells if c[2] >= max_detected_w - 4 and c[3] >= max_detected_h - 4]
+                
+                avg_cell_w = np.median([c[2] for c in true_tile_contours])
+                avg_cell_h = np.median([c[3] for c in true_tile_contours])
+                
+                cols = int(round(final_w / avg_cell_w))
+                rows = int(round(final_h / avg_cell_h))
+            else:
+                rows, cols = calculate_matrix_by_projection(grid_edges, final_w, final_h)
+
+            cell_w_step = final_w / cols
+            cell_h_step = final_h / rows
+
+            print(f"\n--- RADAR AUTO-SYNCHRONIZED ---")
+            print(f"Detected Matrix: {rows} rows x {cols} columns")
+            print(f"Unit Cell Size: {cell_w_step:.2f}x{cell_h_step:.2f} pixels")
+            print("\n[CONTROLS]:")
+            print("  F8  -> Recapture Board Bounds (Reset Current Grid)")
+            print("  F9  -> Scan & Print Current Progress Matrix")
+            print("  F10 -> Toggle Grid HUD Overlay ON/OFF")
+            print("  ESC -> Exit Tracker Application Completely")
+
+            # --- LATTICE HUD DISPLAY (TKINTER) ---
+            root = tk.Tk()
+            root.overrideredirect(True)
+            root.geometry(f"{final_w}x{final_h}+{screen_x}+{screen_y}")
+            root.lift()
+            root.wm_attributes("-topmost", True)
+            root.wm_attributes("-disabled", True)
+            root.wm_attributes("-transparentcolor", "pink")
+
+            canvas = tk.Canvas(root, bg="pink", highlightthickness=0)
+            canvas.pack(fill="both", expand=True)
+
+            for i in range(cols + 1):
+                lx = int(i * cell_w_step)
+                canvas.create_line(lx, 0, lx, final_h, fill="green", width=2, tags="grid")
+            for j in range(rows + 1):
+                ly = int(j * cell_h_step)
+                canvas.create_line(0, ly, final_w, ly, fill="green", width=2, tags="grid")
+
+            # Shared runtime states inside loop iteration context
+            app_signals = {"visible": True, "recapture": False, "terminate": False}
+
+            def check_inputs():
+                # F8 -> Break current Tkinter loop to allow recapture
+                if keyboard.is_pressed("F8"):
+                    app_signals["recapture"] = True
+                    root.destroy()
+                    return
+
+                # F10 -> Toggle Overlay Visibility
+                if keyboard.is_pressed("F10"):
+                    app_signals["visible"] = not app_signals["visible"]
+                    action_state = "normal" if app_signals["visible"] else "hidden"
+                    canvas.itemconfigure("grid", state=action_state)
+                    print(f"[HUD] Overlay Layer: {'VISIBLE' if app_signals['visible'] else 'HIDDEN'}")
+                    time.sleep(0.3)
+
+                # F9 -> Live Scan Request
+                if keyboard.is_pressed("F9"):
+                    print(f"\n--- LIVE MATRIX DATA FRAME ({rows}x{cols}) ---")
+                    grid_config = {"top": screen_y, "left": screen_x, "width": final_w, "height": final_h}
+                    with mss.MSS() as fresh_sct:
+                        fresh_shot = cv2.cvtColor(np.array(fresh_sct.grab(grid_config)), cv2.COLOR_BGRA2BGR)
                     
-                    cell_crop = fresh_shot[y1:y2, x1:x2]
-                    row_states.append(identify_cell_state(cell_crop))
-                board_matrix.append(row_states)
+                    board_matrix = []
+                    for r in range(rows):
+                        row_states = []
+                        for c in range(cols):
+                            x1 = int(c * cell_w_step)
+                            y1 = int(r * cell_h_step)
+                            x2 = int((c + 1) * cell_w_step)
+                            y2 = int((r + 1) * cell_h_step)
+                            
+                            cell_crop = fresh_shot[y1:y2, x1:x2]
+                            row_states.append(identify_cell_state(cell_crop))
+                        board_matrix.append(row_states)
 
-            for row in board_matrix:
-                print(" ".join(row))
-            time.sleep(0.4)
+                    for row in board_matrix:
+                        print(" ".join(row))
+                    time.sleep(0.4)
 
-        if keyboard.is_pressed("esc"):
-            root.destroy()
-            return
+                if keyboard.is_pressed("esc"):
+                    app_signals["terminate"] = True
+                    root.destroy()
+                    return
 
-        root.after(50, check_inputs)
+                root.after(50, check_inputs)
 
-    root.after(50, check_inputs)
-    root.mainloop()
+            root.after(50, check_inputs)
+            root.mainloop()
+
+            if app_signals["terminate"]:
+                print("Exiting Tracker application execution.")
+                break
+            if app_signals["recapture"]:
+                print("\n[RESET] Clearing configuration frames...")
+                time.sleep(0.3)
+                continue
+
+if __name__ == "__main__":
+    main()
