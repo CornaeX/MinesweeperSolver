@@ -6,8 +6,8 @@ import tkinter as tk
 import time
 
 # --- YOUR DARK THEME COLORS (CONVERTED HEX TO BGR) ---
-COLOR_UNREVIEWED = np.array([72, 64, 56])   # #384048
-COLOR_REVIEWED = np.array([92, 84, 76])     # #4C545C
+COLOR_REVIEWED = np.array([72, 64, 56])   # #384048
+COLOR_UNREVIEWED = np.array([92, 84, 76])     # #4C545C
 COLOR_FLAG = np.array([89, 89, 247])        # #F75959
 
 # Precise 1-8 Digit Palette Mapping
@@ -55,6 +55,93 @@ def identify_cell_state(cell_img):
 
     return "."
 
+def get_neighbors(r, c, rows, cols):
+    """Returns valid 8-directional coordinate neighbors for a given grid cell coordinate."""
+    neighbors = []
+    for dr in [-1, 0, 1]:
+        for dc in [-1, 0, 1]:
+            if dr == 0 and dc == 0:
+                continue
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < rows and 0 <= nc < cols:
+                neighbors.append((nr, nc))
+    return neighbors
+
+def compute_solver_overlay(matrix, rows, cols):
+    """Executes logical deduction matrix rules and analyzes risk probabilities."""
+    overlay = [["" for _ in range(cols)] for _ in range(rows)]
+    confirmed_safe = set()
+    confirmed_mines = set()
+
+    # Default mappings: set explicit flags to red, unrevealed tiles to default uncertain green
+    for r in range(rows):
+        for c in range(cols):
+            if matrix[r][c] == 'F':
+                overlay[r][c] = '#FF4444'  # Red
+            elif matrix[r][c] == 'H':
+                overlay[r][c] = '#00FF66'  # Green (Uncertain default)
+
+    # 1. First-Order Logic Pass (Direct Constraints Match)
+    for r in range(rows):
+        for c in range(cols):
+            val = matrix[r][c]
+            if val in ['1', '2', '3', '4', '5', '6', '7', '8']:
+                num = int(val)
+                neighbors = get_neighbors(r, c, rows, cols)
+                
+                h_list = [n for n in neighbors if matrix[n[0]][n[1]] == 'H']
+                f_list = [n for n in neighbors if matrix[n[0]][n[1]] == 'F']
+                
+                h_count, f_count = len(h_list), len(f_list)
+
+                # Flag count satisfies number value -> All other hidden neighbors are safe
+                if f_count == num:
+                    for h_cell in h_list:
+                        confirmed_safe.add(h_cell)
+                # Hidden space + flags match number value exactly -> All hidden targets are mines
+                if f_count + h_count == num:
+                    for h_cell in h_list:
+                        confirmed_mines.add(h_cell)
+
+    # Lock down deterministic answers
+    for (r, c) in confirmed_safe:
+        overlay[r][c] = '#00A2FF'  # Blue (Safe)
+    for (r, c) in confirmed_mines:
+        overlay[r][c] = '#FF4444'  # Red (Mine)
+
+    # 2. Probability Heuristic Pass (Calculate Yellow Best Guess)
+    mine_probs = {}
+    for r in range(rows):
+        for c in range(cols):
+            val = matrix[r][c]
+            if val in ['1', '2', '3', '4', '5', '6', '7', '8']:
+                num = int(val)
+                neighbors = get_neighbors(r, c, rows, cols)
+                
+                # Look only at active unknown spots (ignore already cleared/safe/mined results)
+                unresolved_h = [n for n in neighbors if matrix[n[0]][n[1]] == 'H' and n not in confirmed_safe and n not in confirmed_mines]
+                locked_mines = len([n for n in neighbors if matrix[n[0]][n[1]] == 'F' or n in confirmed_mines])
+                
+                rem_mines = num - locked_mines
+                rem_h = len(unresolved_h)
+
+                if rem_h > 0 and rem_mines >= 0:
+                    local_p = rem_mines / rem_h
+                    for h_cell in unresolved_h:
+                        # Assign the highest local risk constraint found across neighbors
+                        mine_probs[h_cell] = max(mine_probs.get(h_cell, 0.0), local_p)
+
+    # Isolate unassigned cells and highlight the absolute lowest risk index
+    eligible_yellows = {k: v for k, v in mine_probs.items() if k not in confirmed_safe and k not in confirmed_mines}
+    if eligible_yellows:
+        min_p = min(eligible_yellows.values())
+        if min_p < 1.0: # Keep yellow strictly for non-exploding tiles
+            for h_cell, p in eligible_yellows.items():
+                if p == min_p:
+                    overlay[h_cell[0]][h_cell[1]] = '#FFBB33'  # Yellow (Best Guess)
+
+    return overlay
+
 def calculate_matrix_by_projection(edge_map, total_w, total_h):
     """Fallback: Scans periodic frequency peaks of grid lines to find rows/cols."""
     v_proj = np.sum(edge_map, axis=0)
@@ -81,7 +168,7 @@ def main():
     while True:
         print("\n[READY] Press F8 to select/recapture the Minesweeper window area...")
         keyboard.wait("F8")
-        time.sleep(0.2)  # Short debounce
+        time.sleep(0.2)
 
         with mss.MSS() as sct:
             monitor = sct.monitors[1]
@@ -129,9 +216,7 @@ def main():
             screen_x = monitor["left"] + x + grid_x1
             screen_y = monitor["top"] + y + grid_y1
 
-            # Dynamic Size Matrix Processing
             grid_edges = edges[grid_y1:grid_y2, grid_x1:grid_x2]
-            
             if valid_cells:
                 max_detected_w = max(c[2] for c in valid_cells)
                 max_detected_h = max(c[3] for c in valid_cells)
@@ -153,9 +238,9 @@ def main():
             print(f"Unit Cell Size: {cell_w_step:.2f}x{cell_h_step:.2f} pixels")
             print("\n[CONTROLS]:")
             print("  F8  -> Recapture Board Bounds (Reset Current Grid)")
-            print("  F9  -> Scan & Print Current Progress Matrix")
-            print("  F10 -> Toggle Grid HUD Overlay ON/OFF")
-            print("  ESC -> Exit Tracker Application Completely")
+            print("  F9  -> Execute Logic Solver & Render Color Overlays")
+            print("  F10 -> Toggle Entire HUD Display Layer ON/OFF")
+            print("  ESC -> Exit Application Completely")
 
             # --- LATTICE HUD DISPLAY (TKINTER) ---
             root = tk.Tk()
@@ -171,32 +256,30 @@ def main():
 
             for i in range(cols + 1):
                 lx = int(i * cell_w_step)
-                canvas.create_line(lx, 0, lx, final_h, fill="green", width=2, tags="grid")
+                canvas.create_line(lx, 0, lx, final_h, fill="#2A2A2A", width=1, tags="grid")
             for j in range(rows + 1):
                 ly = int(j * cell_h_step)
-                canvas.create_line(0, ly, final_w, ly, fill="green", width=2, tags="grid")
+                canvas.create_line(0, ly, final_w, ly, fill="#2A2A2A", width=1, tags="grid")
 
-            # Shared runtime states inside loop iteration context
             app_signals = {"visible": True, "recapture": False, "terminate": False}
 
             def check_inputs():
-                # F8 -> Break current Tkinter loop to allow recapture
                 if keyboard.is_pressed("F8"):
                     app_signals["recapture"] = True
                     root.destroy()
                     return
 
-                # F10 -> Toggle Overlay Visibility
                 if keyboard.is_pressed("F10"):
                     app_signals["visible"] = not app_signals["visible"]
                     action_state = "normal" if app_signals["visible"] else "hidden"
                     canvas.itemconfigure("grid", state=action_state)
+                    canvas.itemconfigure("overlay", state=action_state)
                     print(f"[HUD] Overlay Layer: {'VISIBLE' if app_signals['visible'] else 'HIDDEN'}")
                     time.sleep(0.3)
 
-                # F9 -> Live Scan Request
+                # Live Solver Routine Scan
                 if keyboard.is_pressed("F9"):
-                    print(f"\n--- LIVE MATRIX DATA FRAME ({rows}x{cols}) ---")
+                    canvas.delete("overlay") # Clear last cycle's calculations
                     grid_config = {"top": screen_y, "left": screen_x, "width": final_w, "height": final_h}
                     with mss.MSS() as fresh_sct:
                         fresh_shot = cv2.cvtColor(np.array(fresh_sct.grab(grid_config)), cv2.COLOR_BGRA2BGR)
@@ -209,13 +292,29 @@ def main():
                             y1 = int(r * cell_h_step)
                             x2 = int((c + 1) * cell_w_step)
                             y2 = int((r + 1) * cell_h_step)
-                            
-                            cell_crop = fresh_shot[y1:y2, x1:x2]
-                            row_states.append(identify_cell_state(cell_crop))
+                            row_states.append(identify_cell_state(fresh_shot[y1:y2, x1:x2]))
                         board_matrix.append(row_states)
 
-                    for row in board_matrix:
-                        print(" ".join(row))
+                    # Compute color matrices
+                    solver_map = compute_solver_overlay(board_matrix, rows, cols)
+                    action_state = "normal" if app_signals["visible"] else "hidden"
+
+                    # Render targeted colorful bounding accents inside the cell frames
+                    for r in range(rows):
+                        for c in range(cols):
+                            color_hex = solver_map[r][c]
+                            if color_hex:
+                                x1 = int(c * cell_w_step)
+                                y1 = int(r * cell_h_step)
+                                x2 = int((c + 1) * cell_w_step)
+                                y2 = int((r + 1) * cell_h_step)
+                                # Clean 4px internal border frame highlight
+                                canvas.create_rectangle(
+                                    x1 + 3, y1 + 3, x2 - 3, y2 - 3, 
+                                    outline=color_hex, width=3, 
+                                    tags="overlay", state=action_state
+                                )
+                    print("[SOLVER] Grid analytics updated and drawn successfully.")
                     time.sleep(0.4)
 
                 if keyboard.is_pressed("esc"):
@@ -229,10 +328,8 @@ def main():
             root.mainloop()
 
             if app_signals["terminate"]:
-                print("Exiting Tracker application execution.")
                 break
             if app_signals["recapture"]:
-                print("\n[RESET] Clearing configuration frames...")
                 time.sleep(0.3)
                 continue
 
