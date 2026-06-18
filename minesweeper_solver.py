@@ -28,7 +28,6 @@ MOUSE_SPEED_FACTOR = 0.3
 DELAY_BEFORE_CLICK = (0.01, 0.04)
 
 # Reaction pause duration (min, max in seconds) AFTER making a click before choosing the next move.
-# Note: Setting this too close to 0.0 might cause duplicate clicks before the screen updates.
 DELAY_AFTER_CLICK = (0.08, 0.18)
 # ==============================================================================
 
@@ -54,13 +53,11 @@ def human_move_to(target_x, target_y):
     if start_x == target_x and start_y == target_y:
         return
 
-    # Instant execution bypass
     if MOUSE_MODE == "instant":
         pyautogui.moveTo(target_x, target_y)
         time.sleep(random.uniform(*DELAY_BEFORE_CLICK))
         return
 
-    # Fast/Adaptive Human Curve Calculations
     distance = math.hypot(target_x - start_x, target_y - start_y)
     steps = max(6, int((distance / 25) * MOUSE_SPEED_FACTOR))
     
@@ -69,12 +66,11 @@ def human_move_to(target_x, target_y):
     
     for i in range(1, steps + 1):
         t = i / steps
-        t = 1 - (1 - t) ** 3  # Cubic Out deceleration easing
+        t = 1 - (1 - t) ** 3
         
         curr_x = int((1 - t)**2 * start_x + 2 * (1 - t) * t * control_x + t**2 * target_x)
         curr_y = int((1 - t)**2 * start_y + 2 * (1 - t) * t * control_y + t**2 * target_y)
         
-        # Inject minor human jitters only if running at standard/slower profile tracking speeds
         if t < 0.9 and MOUSE_SPEED_FACTOR > 0.5:
             curr_x += random.randint(-1, 1)
             curr_y += random.randint(-1, 1)
@@ -102,7 +98,6 @@ def auto_solver_loop(app_signals, screen_x, screen_y, cell_w_step, cell_h_step):
         target_cell = None
         click_type = "left"
 
-        # Priority Processing Chain
         if mine_set:
             target_cell = list(mine_set)[0]
             click_type = "right"
@@ -125,9 +120,8 @@ def auto_solver_loop(app_signals, screen_x, screen_y, cell_w_step, cell_h_step):
                 human_move_to(click_x, click_y)
                 if app_signals["auto_play"]:
                     pyautogui.click(button=click_type)
-                    
-                    # Wipe cache instructions instantly to bypass race conditions
                     app_signals["latest_moves"] = (set(), set(), {})
+                    app_signals["force_refresh"] = True
                     time.sleep(random.uniform(*DELAY_AFTER_CLICK))
             except pyautogui.FailSafeException:
                 print("[ABORT] Fail-safe triggered via hardware gesture boundary!")
@@ -147,14 +141,9 @@ def identify_cell_state(cell_img):
     inner = cell_img[int(h*0.25):int(h*0.75), int(w*0.25):int(w*0.75)]
     avg_bgr = np.mean(inner, axis=(0, 1))
 
-    # 1. Flag Detection
-    flag_dist = np.linalg.norm(inner - COLOR_FLAG, axis=2)
-    if np.sum(flag_dist < 40) > 8: return "F"
-
-    # 2. Unreviewed / Hidden Detection
+    if np.sum(np.linalg.norm(inner - COLOR_FLAG, axis=2) < 40) > 8: return "F"
     if np.linalg.norm(avg_bgr - COLOR_UNREVIEWED) < 15: return "H" 
 
-    # 3. Reviewed Space / Number Detection
     color_scores = {}
     for num_str, target_bgr in NUM_COLORS.items():
         distances = np.linalg.norm(inner - target_bgr, axis=2)
@@ -176,6 +165,7 @@ def get_neighbors(r, c, rows, cols):
     return neighbors
 
 def compute_solver_overlay(matrix, rows, cols):
+    """Advanced solver engine utilizing first-order logic and subset/pattern deduction maps."""
     overlay = [["" for _ in range(cols)] for _ in range(rows)]
     confirmed_safe = set()
     confirmed_mines = set()
@@ -183,28 +173,82 @@ def compute_solver_overlay(matrix, rows, cols):
     for r in range(rows):
         for c in range(cols):
             if matrix[r][c] == 'F': overlay[r][c] = '#FF4444'
-            # elif matrix[r][c] == 'H': overlay[r][c] = '#00FF66'
 
-    # Logic pass
-    for r in range(rows):
-        for c in range(cols):
-            val = matrix[r][c]
-            if val in ['1', '2', '3', '4', '5', '6', '7', '8']:
-                num = int(val)
-                neighbors = get_neighbors(r, c, rows, cols)
-                
-                h_list = [n for n in neighbors if matrix[n[0]][n[1]] == 'H']
-                f_list = [n for n in neighbors if matrix[n[0]][n[1]] == 'F']
-                
-                if len(f_list) == num:
-                    for h_cell in h_list: confirmed_safe.add(h_cell)
-                if len(f_list) + len(h_list) == num:
-                    for h_cell in h_list: confirmed_mines.add(h_cell)
+    # Loop logic passes iteratively to combine cascading matrix discoveries seamlessly
+    while True:
+        deductions_made = False
 
-    for (r, c) in confirmed_safe: overlay[r][c] = '#00A2FF'
-    for (r, c) in confirmed_mines: overlay[r][c] = '#FF4444'
+        # --- PASS 1: FIRST-ORDER DIRECT LOGIC ---
+        for r in range(rows):
+            for c in range(cols):
+                val = matrix[r][c]
+                if val in ['1', '2', '3', '4', '5', '6', '7', '8']:
+                    num = int(val)
+                    neighbors = get_neighbors(r, c, rows, cols)
+                    
+                    h_list = [n for n in neighbors if matrix[n[0]][n[1]] == 'H' and n not in confirmed_safe and n not in confirmed_mines]
+                    f_count = len([n for n in neighbors if matrix[n[0]][n[1]] == 'F' or n in confirmed_mines])
+                    
+                    # All remaining are mines
+                    if len(h_list) + f_count == num and len(h_list) > 0:
+                        for cell in h_list:
+                            confirmed_mines.add(cell)
+                            deductions_made = True
+                    # All remaining are safe
+                    if f_count == num and len(h_list) > 0:
+                        for cell in h_list:
+                            confirmed_safe.add(cell)
+                            deductions_made = True
 
-    # Probability pass
+        # --- PASS 2: SUBSET/PATTERN COMPLEX LOGIC (Handles 1-2-1, 1-2-2-1, etc.) ---
+        constraints = []
+        for r in range(rows):
+            for c in range(cols):
+                val = matrix[r][c]
+                if val in ['1', '2', '3', '4', '5', '6', '7', '8']:
+                    num = int(val)
+                    neighbors = get_neighbors(r, c, rows, cols)
+                    
+                    h_set = set(n for n in neighbors if matrix[n[0]][n[1]] == 'H' and n not in confirmed_safe and n not in confirmed_mines)
+                    f_count = len([n for n in neighbors if matrix[n[0]][n[1]] == 'F' or n in confirmed_mines])
+                    
+                    rem_mines = num - f_count
+                    if h_set:
+                        constraints.append((h_set, rem_mines))
+
+        # Cross-compare shared borders between adjacent constraints
+        for i in range(len(constraints)):
+            for j in range(len(constraints)):
+                if i == j: continue
+                set_A, mines_A = constraints[i]
+                set_B, mines_B = constraints[j]
+
+                # If group A's cells are completely inside group B's cells
+                if set_A.issubset(set_B) and set_A != set_B:
+                    diff_set = set_B - set_A
+                    diff_mines = mines_B - mines_A
+
+                    # Case A: Leftover cells cannot contain any mines -> Clear them!
+                    if diff_mines == 0:
+                        for cell in diff_set:
+                            if cell not in confirmed_safe:
+                                confirmed_safe.add(cell)
+                                deductions_made = True
+                    # Case B: Leftover cells match exact remaining mines -> Flag them!
+                    elif diff_mines == len(diff_set):
+                        for cell in diff_set:
+                            if cell not in confirmed_mines:
+                                confirmed_mines.add(cell)
+                                deductions_made = True
+
+        if not deductions_made:
+            break
+
+    # Commit deductions to screen graphics pipeline
+    for (r, c) in confirmed_safe: overlay[r][c] = '#00A2FF'  # Blue
+    for (r, c) in confirmed_mines: overlay[r][c] = '#FF4444' # Red
+
+    # --- PASS 3: PROBABILITY HEURISTIC ESTIMATION ---
     mine_probs = {}
     for r in range(rows):
         for c in range(cols):
@@ -226,7 +270,7 @@ def compute_solver_overlay(matrix, rows, cols):
         min_p = min(eligible_yellows.values())
         if min_p < 1.0:
             for h_cell, p in eligible_yellows.items():
-                if p == min_p: overlay[h_cell[0]][h_cell[1]] = '#FFBB33'
+                if p == min_p: overlay[h_cell[0]][h_cell[1]] = '#FFBB33' # Yellow
 
     return overlay, confirmed_safe, confirmed_mines, eligible_yellows
 
@@ -325,7 +369,8 @@ def main():
 
             app_signals = {
                 "visible": True, "recapture": False, "terminate": False, "toggle_visible": False,
-                "auto_play": False, "auto_playing_thread": False, "latest_moves": None
+                "auto_play": False, "auto_playing_thread": False, "latest_moves": None,
+                "force_refresh": False
             }
             last_board_matrix = [None]
 
@@ -378,7 +423,8 @@ def main():
                             row_states.append(identify_cell_state(fresh_shot[y1:y2, x1:x2]))
                         board_matrix.append(row_states)
 
-                    if board_matrix != last_board_matrix[0]:
+                    if board_matrix != last_board_matrix[0] or app_signals.get("force_refresh"):
+                        app_signals["force_refresh"] = False # Reset the flag immediately
                         last_board_matrix[0] = board_matrix
                         canvas.delete("overlay")
                         solver_map, safe_set, mine_set, yellow_dict = compute_solver_overlay(board_matrix, rows, cols)
@@ -392,7 +438,7 @@ def main():
                                     x2, y2 = int((c + 1) * cell_w_step), int((r + 1) * cell_h_step)
                                     canvas.create_rectangle(x1 + 3, y1 + 3, x2 - 3, y2 - 3, outline=color_hex, width=3, tags="overlay")
 
-                root.after(40, check_inputs_and_update)  # Sped up overlay check cycle rate slightly
+                root.after(40, check_inputs_and_update)
 
             root.after(40, check_inputs_and_update)
             root.mainloop()
